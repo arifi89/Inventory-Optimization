@@ -27,9 +27,10 @@ wheels/
 .ipynb_checkpoints
 */.ipynb_checkpoints/*
 
-# Data files (optional - uncomment if needed)
-# *.csv
-# *.xlsx
+# Data files - exclude large raw data to stay within GitHub limits
+data/raw/*.csv
+data/processed/*.csv
+*.xlsx
 
 # IDE
 .vscode/
