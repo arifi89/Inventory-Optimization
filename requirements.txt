@@ -1,8 +1,43 @@
-pandas>=1.5.0
-numpy>=1.23.0
-matplotlib>=3.6.0
-seaborn>=0.12.0
-scikit-learn>=1.2.0
-openpyxl>=3.0.0
-jupyter>=1.0.0
-notebook>=6.5.0
+# ============================================================================
+# INVENTORY OPTIMIZATION PROJECT - PYTHON DEPENDENCIES
+# ============================================================================
+# Install all dependencies with: pip install -r requirements.txt
+# ============================================================================
+
+# Core Data Processing
+pandas>=2.0.0              # Data manipulation and analysis
+numpy>=1.24.0              # Numerical computing
+openpyxl>=3.1.0            # Excel file support
+
+# Data Visualization
+matplotlib>=3.7.0          # Base plotting library
+seaborn>=0.12.0            # Statistical data visualization
+plotly>=5.14.0             # Interactive visualizations
+
+# Statistical Analysis
+scipy>=1.10.0              # Scientific computing
+statsmodels>=0.14.0        # Statistical modeling
+
+# Machine Learning (Optional - for advanced features)
+scikit-learn>=1.2.0        # Machine learning algorithms
+prophet>=1.1.0             # Time series forecasting
+xgboost>=1.7.0             # Gradient boosting
+
+# Jupyter Environment
+jupyter>=1.0.0             # Jupyter notebook
+ipykernel>=6.22.0          # IPython kernel for Jupyter
+ipywidgets>=8.0.0          # Interactive widgets
+
+# Utilities
+python-dateutil>=2.8.2     # Date/time utilities
+pytz>=2023.3               # Timezone support
+pyyaml>=6.0                # YAML configuration files
+
+# Code Quality (Optional)
+black>=23.3.0              # Code formatter
+flake8>=6.0.0              # Linting
+pytest>=7.3.0              # Testing framework
+
+# Export & Reporting (Optional)
+fpdf>=1.7.2                # PDF generation
+jinja2>=3.1.2              # Template engine for reports
