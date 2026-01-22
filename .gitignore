@@ -1,12 +1,35 @@
-# Python
+# ============================================================================
+# INVENTORY OPTIMIZATION PROJECT - GIT IGNORE
+# ============================================================================
+
+# ============================================================================
+# DATA FILES (Exclude large CSV files from Git)
+# ============================================================================
+# Raw data - too large for GitHub, download from Kaggle
+data/raw/*.csv
+data/raw/*.xlsx
+data/raw/*.xls
+
+# Processed data - generated files, can be reproduced
+data/processed/*.csv
+data/processed/*.xlsx
+
+# Segmentation outputs - generated files
+data/segmentation/*.csv
+
+# ============================================================================
+# PYTHON
+# ============================================================================
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# C extensions
 *.so
+
+# Distribution / packaging
 .Python
-env/
-venv/
-ENV/
 build/
 develop-eggs/
 dist/
@@ -23,24 +46,97 @@ wheels/
 .installed.cfg
 *.egg
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# ============================================================================
+# JUPYTER NOTEBOOK
+# ============================================================================
+.ipynb_checkpoints/
 */.ipynb_checkpoints/*
 
-# Data files - exclude large raw data to stay within GitHub limits
-data/raw/*.csv
-data/processed/*.csv
-*.xlsx
+# Jupyter Notebook temporary files
+*.ipynb~
 
-# IDE
+# ============================================================================
+# POWER BI
+# ============================================================================
+# Power BI temporary files
+*.pbix.tmp
+*.pbit.tmp
+
+# Power BI workspace files (optional - uncomment if you want to exclude)
+# *.pbix
+
+# ============================================================================
+# REPORTS & OUTPUTS
+# ============================================================================
+# Generated reports (optional - keep or exclude based on preference)
+# reports/*.pdf
+# reports/charts/*.png
+
+# ============================================================================
+# IDE & EDITOR
+# ============================================================================
+# VS Code
 .vscode/
+*.code-workspace
+
+# PyCharm
 .idea/
+*.iml
+
+# Spyder
+.spyderproject
+.spyproject
+
+# ============================================================================
+# OPERATING SYSTEM
+# ============================================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# ============================================================================
+# LOGS & DATABASES
+# ============================================================================
+*.log
+*.sql
+*.sqlite
+*.db
+
+# ============================================================================
+# TEMPORARY FILES
+# ============================================================================
+*.tmp
+*.temp
+*.bak
 *.swp
 *.swo
 
-# OS
-.DS_Store
-Thumbs.db
+# ============================================================================
+# CONFIGURATION (Keep config templates, exclude personal configs)
+# ============================================================================
+# Uncomment if you have sensitive configuration
+# config/local_config.yaml
+# .env
 
-# Power BI
-*.pbix.tmp
+# ============================================================================
+# CUSTOM EXCLUSIONS
+# ============================================================================
+# Add any project-specific files to exclude here
+notes/
+scratch/
+archive/
