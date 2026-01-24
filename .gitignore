@@ -17,6 +17,9 @@ data/processed/*.xlsx
 # Segmentation outputs - generated files
 data/segmentation/*.csv
 
+# Data model outputs - large fact tables (can be regenerated)
+data/data_model/*.csv
+
 # ============================================================================
 # PYTHON
 # ============================================================================
