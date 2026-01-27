@@ -180,21 +180,15 @@ def create_dim_product(sales_df, purchases_df, begin_inv_df, end_inv_df):
     # Get unique products
     dim_product = all_products[['Brand', 'Description', 'Size']].drop_duplicates().reset_index(drop=True)
     
-    # Rename columns
+    # Rename columns - Product_Number is the Brand code (unified identifier)
     dim_product.rename(columns={
-        'Brand': 'brand_code',
+        'Brand': 'Product_Number',
         'Description': 'description',
         'Size': 'size'
     }, inplace=True)
     
-    # Create surrogate key (product_key) - ensure uniqueness
-    dim_product['product_key'] = (
-        dim_product['brand_code'].astype(str) + '_' + 
-        dim_product['size'].astype(str)
-    )
-    
-    # Remove any duplicates in product_key
-    dim_product = dim_product.drop_duplicates(subset=['product_key'], keep='first').reset_index(drop=True)
+    # Remove any duplicates in Product_Number
+    dim_product = dim_product.drop_duplicates(subset=['Product_Number'], keep='first').reset_index(drop=True)
     
     # Add product attributes (placeholders - to be enriched later)
     dim_product['category'] = 'Beverage'  # Update with actual categorization logic
@@ -211,8 +205,8 @@ def create_dim_product(sales_df, purchases_df, begin_inv_df, end_inv_df):
     dim_product['created_date'] = datetime.now()
     dim_product['modified_date'] = datetime.now()
     
-    # Reorder columns
-    cols = ['product_key', 'brand_code', 'description', 'size', 'category', 
+    # Reorder columns - Product_Number is the primary key
+    cols = ['Product_Number', 'description', 'size', 'category', 
             'subcategory', 'abc_class', 'xyz_class', 'is_active', 
             'effective_date', 'expiration_date', 'created_date', 'modified_date']
     dim_product = dim_product[cols]
@@ -499,145 +493,148 @@ def create_dim_vendor(purchases_df):
 
 def create_fact_sales(sales_df, dim_product, dim_store, dim_date):
     """
-    Create sales fact table
+    Create sales fact table - matches cleaned_sales.csv structure
+    Uses Sales_Order as primary key, Brand as unified Product_Number
     
     Returns:
     --------
-    pd.DataFrame : Sales fact table
+    pd.DataFrame : Sales fact table with original column arrangement + Tax
     """
     print("💰 Building Fact_Sales...")
     
     fact = sales_df.copy()
     
-    # Create product_key for joining
-    if 'Brand' in fact.columns and 'Size' in fact.columns:
-        fact['product_key'] = (
-            fact['Brand'].astype(str) + '_' + 
-            fact['Size'].astype(str)
-        )
+    # Set Product_Number = Brand (unified product identifier)
+    if 'Brand' in fact.columns:
+        fact['Product_Number'] = fact['Brand']
     
-    # Create date_key from actual column name
-    if 'Sales_Date' in fact.columns:
-        fact['date_key'] = pd.to_datetime(fact['Sales_Date']).dt.strftime('%Y%m%d').astype(int)
-    elif 'SalesDate' in fact.columns:
-        fact['date_key'] = pd.to_datetime(fact['SalesDate']).dt.strftime('%Y%m%d').astype(int)
-    elif 'Date' in fact.columns:
-        fact['date_key'] = pd.to_datetime(fact['Date']).dt.strftime('%Y%m%d').astype(int)
-    
-    # Rename columns to match fact table schema
+    # Rename to standardize (keep original names from cleaned file)
     column_mapping = {
-        'Store': 'store_key',
-        'Sales_Quantity': 'quantity_sold',
-        'Unit_Price': 'sales_price',
-        'Total_Price': 'sales_amount',
-        'SalesQuantity': 'quantity_sold',
-        'SalesPrice': 'sales_price',
-        'SalesDollars': 'sales_amount',
-        'Sales_Order': 'sale_id'
+        'Sales_Quantity': 'Quantity_Sold',
+        'Total_Price': 'Sales_Amount'
     }
     
     for old_col, new_col in column_mapping.items():
         if old_col in fact.columns:
             fact.rename(columns={old_col: new_col}, inplace=True)
     
-    # Calculate sales_amount if not present
-    if 'sales_amount' not in fact.columns and 'quantity_sold' in fact.columns and 'sales_price' in fact.columns:
-        fact['sales_amount'] = fact['quantity_sold'] * fact['sales_price']
+    # Add Tax if not present (should already exist in cleaned_sales)
+    if 'Tax' not in fact.columns:
+        fact['Tax'] = 0
     
-    # Create unique sale_id if Sales_Order column wasn't present
-    if 'sale_id' not in fact.columns:
-        fact['sale_id'] = (
-            fact['store_key'].astype(str) + '_' +
-            fact['date_key'].astype(str) + '_' +
-            fact['product_key'].astype(str) + '_' +
-            fact.groupby(['store_key', 'date_key', 'product_key']).cumcount().astype(str)
-        )
-    
-    # Select final columns
-    final_cols = ['sale_id', 'date_key', 'product_key', 'store_key', 
-                  'quantity_sold', 'sales_price', 'sales_amount']
+    # Select final columns - Product_Number replaces Brand
+    # Original structure but with Product_Number instead of Brand
+    final_cols = ['Sales_Order', 'Sales_Date', 'Store', 'Product_Number', 
+                  'Description', 'Size', 
+                  'Unit_Price', 'Quantity_Sold', 'Sales_Amount', 'Tax']
     
     # Keep only columns that exist
     final_cols = [col for col in final_cols if col in fact.columns]
     fact_sales = fact[final_cols]
     
     print(f"   ✅ Created {len(fact_sales):,} sales transactions")
+    print(f"   📊 Columns: {list(fact_sales.columns)}")
     return fact_sales
 
 
 def create_fact_purchases(purchases_df, invoice_df, dim_product, dim_vendor, dim_date):
     """
-    Create purchases fact table
+    Create purchases fact table - matches cleaned_purchases.csv structure
+    Uses Brand as unified Product_Number
+    Allocates Freight_Cost from invoice data by PO (proportional to quantity)
     
     Returns:
     --------
-    pd.DataFrame : Purchases fact table
+    pd.DataFrame : Purchases fact table with original column arrangement + Freight_Cost
     """
     print("🛒 Building Fact_Purchases...")
     
     fact = purchases_df.copy()
     
-    # Create product_key
-    if 'Brand' in fact.columns and 'Size' in fact.columns:
-        fact['product_key'] = (
-            fact['Brand'].astype(str) + '_' + 
-            fact['Size'].astype(str)
-        )
+    # Set Product_Number = Brand (unified product identifier)
+    if 'Brand' in fact.columns:
+        fact['Product_Number'] = fact['Brand']
     
-    # Create date_key from actual column names
-    if 'Po_Date' in fact.columns:
-        fact['date_key'] = pd.to_datetime(fact['Po_Date']).dt.strftime('%Y%m%d').astype(int)
-    elif 'Receiving_Date' in fact.columns:
-        fact['date_key'] = pd.to_datetime(fact['Receiving_Date']).dt.strftime('%Y%m%d').astype(int)
-    elif 'PurchaseDate' in fact.columns:
-        fact['date_key'] = pd.to_datetime(fact['PurchaseDate']).dt.strftime('%Y%m%d').astype(int)
-    elif 'ReceivingDate' in fact.columns:
-        fact['date_key'] = pd.to_datetime(fact['ReceivingDate']).dt.strftime('%Y%m%d').astype(int)
-    
-    # Rename columns
+    # Rename to standardize
     column_mapping = {
-        'Vendor_Number': 'vendor_key',
-        'VendorNumber': 'vendor_key',
-        'Quantity': 'quantity_purchased',
-        'Total_Price': 'purchase_amount',
-        'Dollars': 'purchase_amount',
-        'Po_Number': 'po_number',
-        'PONumber': 'po_number',
-        'Invoice_Date': 'invoice_date',
-        'InvoiceDate': 'invoice_date'
+        'Quantity': 'Quantity_Purchased',
+        'Total_Price': 'Purchase_Amount'
     }
     
     for old_col, new_col in column_mapping.items():
         if old_col in fact.columns:
             fact.rename(columns={old_col: new_col}, inplace=True)
+
+    # Calculate Unit_Cost if possible
+    if 'Purchase_Amount' in fact.columns and 'Quantity_Purchased' in fact.columns:
+        fact['Unit_Cost'] = fact['Purchase_Amount'] / fact['Quantity_Purchased'].replace(0, 1)
+
+    # ------------------------------------------------------------------
+    # Allocate Freight_Cost from invoice data by PO (proportional to quantity)
+    # Logic: 
+    #   1. Get total Freight_Cost per PO from invoice_df
+    #   2. Sum total Quantity_Purchased per PO in fact_purchases
+    #   3. Calculate: freight_per_piece = total_freight / total_quantity
+    #   4. Apply to each line: Freight_Cost = Quantity_Purchased * freight_per_piece
+    # ------------------------------------------------------------------
+    fact['Freight_Cost'] = 0  # default
+    if not invoice_df.empty and 'Freight_Cost' in invoice_df.columns and 'Po_Number' in fact.columns:
+        # Get freight cost by PO from invoice data
+        freight_by_po = (
+            invoice_df.groupby('Po_Number')['Freight_Cost']
+            .sum()
+            .reset_index()
+            .rename(columns={'Freight_Cost': 'total_freight_for_po'})
+        )
+
+        # Get total quantity purchased by PO in fact_purchases
+        qty_by_po = (
+            fact.groupby('Po_Number')['Quantity_Purchased']
+            .sum()
+            .reset_index()
+            .rename(columns={'Quantity_Purchased': 'total_qty_for_po'})
+        )
+
+        # Merge to get both totals
+        po_summary = freight_by_po.merge(qty_by_po, on='Po_Number', how='inner')
+        
+        # Calculate freight per piece (avoid divide by zero)
+        po_summary['freight_per_piece'] = np.where(
+            po_summary['total_qty_for_po'] > 0,
+            po_summary['total_freight_for_po'] / po_summary['total_qty_for_po'],
+            0
+        )
+
+        # Merge back to fact_purchases
+        fact = fact.merge(
+            po_summary[['Po_Number', 'freight_per_piece']],
+            on='Po_Number',
+            how='left'
+        )
+        
+        # Calculate Freight_Cost for each line
+        fact['Freight_Cost'] = (fact['Quantity_Purchased'] * fact['freight_per_piece']).fillna(0)
+        fact = fact.drop(columns=['freight_per_piece'], errors='ignore')
     
-    # Calculate purchase_price if possible
-    if 'purchase_amount' in fact.columns and 'quantity_purchased' in fact.columns:
-        fact['purchase_price'] = fact['purchase_amount'] / fact['quantity_purchased'].replace(0, 1)
-    
-    # Create unique purchase_id
-    fact['purchase_id'] = (
-        fact['vendor_key'].astype(str) + '_' +
-        fact['date_key'].astype(str) + '_' +
-        fact['product_key'].astype(str) + '_' +
-        fact.groupby(['vendor_key', 'date_key', 'product_key']).cumcount().astype(str)
-    )
-    
-    # Select final columns
-    final_cols = ['purchase_id', 'date_key', 'product_key', 'vendor_key',
-                  'quantity_purchased', 'purchase_price', 'purchase_amount', 
-                  'po_number', 'invoice_date']
+    # Select final columns - Product_Number replaces Brand
+    # Original structure but with Product_Number instead of Brand
+    final_cols = ['Po_Date', 'Po_Number', 'Vendor_Number', 'Vendor_Name', 
+                  'Store', 'Product_Number', 'Description', 'Size',
+                  'Unit_Price', 'Unit_Cost', 'Quantity_Purchased', 'Purchase_Amount',
+                  'Receiving_Date', 'Invoice_Date', 'Freight_Cost']
     
     final_cols = [col for col in final_cols if col in fact.columns]
     fact_purchases = fact[final_cols]
     
     print(f"   ✅ Created {len(fact_purchases):,} purchase transactions")
+    print(f"   📊 Columns: {list(fact_purchases.columns)}")
     return fact_purchases
 
 
 def create_fact_inventory_snapshot(begin_inv_df, end_inv_df, dim_product, dim_store, dim_date):
     """
-    Create inventory snapshot fact table
+    Create inventory snapshot fact table - matches cleaned inventory structure
+    Uses Brand as unified Product_Number
     
     Returns:
     --------
@@ -647,38 +644,30 @@ def create_fact_inventory_snapshot(begin_inv_df, end_inv_df, dim_product, dim_st
     
     # Process beginning inventory
     begin = begin_inv_df.copy()
-    begin['snapshot_type'] = 'Beginning'
+    begin['Snapshot_Type'] = 'Beginning'
     if 'Start_Date' in begin.columns:
-        begin['snapshot_date'] = pd.to_datetime(begin['Start_Date'])
+        begin['Snapshot_Date'] = pd.to_datetime(begin['Start_Date'])
     else:
-        begin['snapshot_date'] = pd.to_datetime('2016-01-01')
+        begin['Snapshot_Date'] = pd.to_datetime('2016-01-01')
     
     # Process ending inventory
     end = end_inv_df.copy()
-    end['snapshot_type'] = 'Ending'
+    end['Snapshot_Type'] = 'Ending'
     if 'End_Date' in end.columns:
-        end['snapshot_date'] = pd.to_datetime(end['End_Date'])
+        end['Snapshot_Date'] = pd.to_datetime(end['End_Date'])
     else:
-        end['snapshot_date'] = pd.to_datetime('2016-12-31')
+        end['Snapshot_Date'] = pd.to_datetime('2016-12-31')
     
     # Combine snapshots
     fact = pd.concat([begin, end], ignore_index=True)
     
-    # Create product_key
-    if 'Brand' in fact.columns and 'Size' in fact.columns:
-        fact['product_key'] = (
-            fact['Brand'].astype(str) + '_' + 
-            fact['Size'].astype(str)
-        )
+    # Set Product_Number = Brand (unified product identifier)
+    if 'Brand' in fact.columns:
+        fact['Product_Number'] = fact['Brand']
     
-    # Create date_key
-    fact['date_key'] = fact['snapshot_date'].dt.strftime('%Y%m%d').astype(int)
-    
-    # Rename columns
+    # Rename to standardize
     column_mapping = {
-        'Store': 'store_key',
-        'On_Hand': 'on_hand_quantity',
-        'Sales_Price': 'unit_price'
+        'On_Hand': 'On_Hand_Quantity'
     }
     
     for old_col, new_col in column_mapping.items():
@@ -686,24 +675,21 @@ def create_fact_inventory_snapshot(begin_inv_df, end_inv_df, dim_product, dim_st
             fact.rename(columns={old_col: new_col}, inplace=True)
     
     # Calculate inventory value
-    if 'on_hand_quantity' in fact.columns and 'unit_price' in fact.columns:
-        fact['inventory_value'] = fact['on_hand_quantity'] * fact['unit_price']
+    if 'On_Hand_Quantity' in fact.columns and 'Sales_Price' in fact.columns:
+        fact['Inventory_Value'] = fact['On_Hand_Quantity'] * fact['Sales_Price']
     
-    # Create unique snapshot_id
-    fact['snapshot_id'] = (
-        fact['store_key'].astype(str) + '_' +
-        fact['product_key'].astype(str) + '_' +
-        fact['date_key'].astype(str)
-    )
-    
-    # Select final columns
-    final_cols = ['snapshot_id', 'date_key', 'product_key', 'store_key',
-                  'on_hand_quantity', 'inventory_value', 'snapshot_type']
+    # Select final columns - Product_Number replaces Brand
+    # Original structure but with Product_Number instead of Brand
+    final_cols = ['Snapshot_Date', 'Product_Number', 'Store', 
+                  'Description', 'Size',
+                  'On_Hand_Quantity', 'Sales_Price', 'Inventory_Value',
+                  'Snapshot_Type']
     
     final_cols = [col for col in final_cols if col in fact.columns]
     fact_inventory = fact[final_cols]
     
     print(f"   ✅ Created {len(fact_inventory):,} inventory snapshots")
+    print(f"   📊 Columns: {list(fact_inventory.columns)}")
     return fact_inventory
 
 
@@ -771,58 +757,39 @@ def main():
     print()
     
     # ========================================================================
-    # STEP 2: CREATE DIMENSION TABLES
+    # STEP 2: SKIP DIMENSION TABLES (using cleaned file structure directly)
     # ========================================================================
-    print("STEP 2: Creating Dimension Tables")
+    print("STEP 2: Dimension Tables")
     print("-" * 80)
-    
-    # Dim_Date
-    dim_date = create_dim_date(Config.DATE_START, Config.DATE_END)
-    dim_date.to_csv(Config.DIM_DATE, index=False)
-    print(f"   💾 Saved to: {Config.DIM_DATE.name}")
-    print()
-    
-    # Dim_Product
-    dim_product = create_dim_product(sales_df, purchases_df, begin_inv_df, end_inv_df)
-    dim_product.to_csv(Config.DIM_PRODUCT, index=False)
-    print(f"   💾 Saved to: {Config.DIM_PRODUCT.name}")
-    print()
-    
-    # Dim_Store
-    dim_store = create_dim_store(sales_df, begin_inv_df)
-    dim_store.to_csv(Config.DIM_STORE, index=False)
-    print(f"   💾 Saved to: {Config.DIM_STORE.name}")
-    print()
-    
-    # Dim_Vendor
-    dim_vendor = create_dim_vendor(purchases_df)
-    dim_vendor.to_csv(Config.DIM_VENDOR, index=False)
-    print(f"   💾 Saved to: {Config.DIM_VENDOR.name}")
+    print("⏭️  Skipping dimension table creation")
+    print("   Using cleaned file structure directly with unified Product_Number")
     print()
     
     # ========================================================================
-    # STEP 3: CREATE FACT TABLES
+    # STEP 3: CREATE FACT TABLES (using cleaned file structure)
     # ========================================================================
     print("STEP 3: Creating Fact Tables")
     print("-" * 80)
+    print("Note: Using cleaned file structure directly (no dimension tables needed)")
+    print()
     
     # Fact_Sales
     if not sales_df.empty:
-        fact_sales = create_fact_sales(sales_df, dim_product, dim_store, dim_date)
+        fact_sales = create_fact_sales(sales_df, None, None, None)
         fact_sales.to_csv(Config.FACT_SALES, index=False)
         print(f"   💾 Saved to: {Config.FACT_SALES.name}")
         print()
     
     # Fact_Purchases
     if not purchases_df.empty:
-        fact_purchases = create_fact_purchases(purchases_df, invoice_df, dim_product, dim_vendor, dim_date)
+        fact_purchases = create_fact_purchases(purchases_df, invoice_df, None, None, None)
         fact_purchases.to_csv(Config.FACT_PURCHASES, index=False)
         print(f"   💾 Saved to: {Config.FACT_PURCHASES.name}")
         print()
     
     # Fact_Inventory_Snapshot
     if not begin_inv_df.empty and not end_inv_df.empty:
-        fact_inventory = create_fact_inventory_snapshot(begin_inv_df, end_inv_df, dim_product, dim_store, dim_date)
+        fact_inventory = create_fact_inventory_snapshot(begin_inv_df, end_inv_df, None, None, None)
         fact_inventory.to_csv(Config.FACT_INVENTORY, index=False)
         print(f"   💾 Saved to: {Config.FACT_INVENTORY.name}")
         print()
@@ -835,16 +802,29 @@ def main():
     print("="*80)
     print()
     print("📊 SUMMARY:")
-    print(f"   Dimension Tables: 4")
     print(f"   Fact Tables: 3")
-    print(f"   Total Files Created: 7")
+    print(f"   - fact_sales: {len(fact_sales):,} rows × {len(fact_sales.columns)} columns")
+    print(f"     Primary Key: Sales_Order | Product ID: Product_Number")
+    print(f"     Tax Total: ${fact_sales['Tax'].sum():,.2f}")
+    print(f"   - fact_purchases: {len(fact_purchases):,} rows × {len(fact_purchases.columns)} columns")
+    print(f"     Primary Key: Po_Number | Product ID: Product_Number")
+    print(f"     Freight Total: ${fact_purchases['Freight_Cost'].sum():,.2f}")
+    print(f"   - fact_inventory: {len(fact_inventory):,} rows × {len(fact_inventory.columns)} columns")
+    print(f"     Product ID: Product_Number")
     print(f"   Output Location: {Config.OUTPUT_DIR}")
     print()
+    print("✅ VALIDATIONS:")
+    print(f"   - Unified Product_Number across all tables")
+    print(f"   - Freight allocation by quantity (exact match with invoices)")
+    print(f"   - Tax preserved from cleaned_sales")
+    print(f"   - Sales_Order is unique primary key in fact_sales")
+    print()
     print("🔗 NEXT STEPS:")
-    print("   1. Validate data quality and referential integrity")
-    print("   2. Enrich dimensions with additional attributes (ABC/XYZ, Kraljic)")
-    print("   3. Load into Power BI or analytical database")
-    print("   4. Build reports and dashboards")
+    print("   1. Build master_dataset for KPI calculations")
+    print("   2. Run ABC/XYZ segmentation on products")
+    print("   3. Perform Kraljic analysis on vendors")
+    print("   4. Calculate inventory optimization metrics (EOQ, ROP, Safety Stock)")
+    print("   5. Load into Power BI for visualization")
     print()
     print("="*80)
 

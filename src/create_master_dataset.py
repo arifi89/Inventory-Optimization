@@ -1,6 +1,12 @@
 """
 Create Master Dataset - Single Source of Truth
 Combines all fact and dimension tables into one comprehensive dataset for analysis
+
+NEW STRUCTURE:
+- Fact tables now use Product_Number (Brand ID) instead of product_key
+- Fact tables contain attributes directly (Description, Size, Unit_Price)
+- Sales dates used directly (Sales_Date) instead of date_key conversion
+- Simplified joins as data is already denormalized
 """
 
 import pandas as pd
@@ -49,25 +55,26 @@ def create_master_dataset():
     print('Step 2: Preparing data for joins...')
     print('-'*100)
     
-    # Convert date columns to datetime for matching
-    fact_sales['Sales_Date'] = pd.to_datetime(fact_sales['date_key'], format='%d/%m/%Y')
-    fact_purchases['Purchase_Date'] = pd.to_datetime(fact_purchases['date_key'], format='%d/%m/%Y')
-    fact_inventory['Inventory_Date'] = pd.to_datetime(fact_inventory['Snapshot_Date'])
+    # Convert date columns to datetime
+    fact_sales['Sales_Date'] = pd.to_datetime(fact_sales['Sales_Date'])
+    fact_purchases['Po_Date'] = pd.to_datetime(fact_purchases['Po_Date'])
+    fact_purchases['Invoice_Date'] = pd.to_datetime(fact_purchases['Invoice_Date'])
+    fact_inventory['Snapshot_Date'] = pd.to_datetime(fact_inventory['Snapshot_Date'])
     
-    # Standardize key types
-    fact_sales['product_key'] = fact_sales['product_key'].astype(str)
-    fact_sales['store_key'] = fact_sales['store_key'].astype(int)
+    # Standardize key types - use Product_Number (Brand ID) instead of product_key
+    fact_sales['Product_Number'] = fact_sales['Product_Number'].astype(int)
+    fact_sales['Store'] = fact_sales['Store'].astype(int)
     
-    fact_purchases['product_key'] = fact_purchases['product_key'].astype(str)
-    fact_purchases['store_key'] = fact_purchases['store_key'].astype(int)
+    fact_purchases['Product_Number'] = fact_purchases['Product_Number'].astype(int)
+    fact_purchases['Vendor_Number'] = fact_purchases['Vendor_Number'].astype(int)
     
-    fact_inventory['product_key'] = fact_inventory['product_key'].astype(str)
-    fact_inventory['store_key'] = fact_inventory['store_key'].astype(int)
+    fact_inventory['Product_Number'] = fact_inventory['Product_Number'].astype(int)
+    fact_inventory['Store'] = fact_inventory['Store'].astype(int)
     
-    dim_product['product_key'] = dim_product['product_key'].astype(str)
+    dim_product['Product_Number'] = dim_product['Product_Number'].astype(int)
     
     print('  ✓ Date columns converted to datetime')
-    print('  ✓ Key columns standardized')
+    print('  ✓ Key columns standardized to integers')
     print()
     
     # ============================================================================
@@ -77,50 +84,49 @@ def create_master_dataset():
     print('-'*100)
     
     master = fact_sales.copy()
+    
+    # Rename columns for clarity (Sales_Date and Product_Number already present)
     master = master.rename(columns={
-        'quantity_sold': 'Sales_Quantity',
-        'sales_price': 'Sales_Price',
-        'sales_amount': 'Sales_Amount'
+        'Quantity_Sold': 'Sales_Quantity',
+        'Unit_Price': 'Sales_Price',
+        'Sales_Amount': 'Gross_Revenue',
+        'Store': 'Store_Key'
     })
     
-    print(f'  Base dataset: {len(master):,} rows')
+    print(f'  Base dataset: {len(master):,} rows with {len(master.columns)} columns')
     print()
     
     # ============================================================================
-    # STEP 4: Join dimension tables first (for enrichment)
+    # STEP 4: Join dimension tables for enrichment
     # ============================================================================
     print('Step 4: Joining dimension tables...')
     print('-'*100)
     
-    # Join dim_product
-    master = master.merge(
-        dim_product[['product_key', 'brand_code', 'description', 'size']],
-        on='product_key',
-        how='left',
-        suffixes=('', '_dim')
-    )
-    master = master.drop(columns=['Product_description'], errors='ignore')  # Remove duplicate
-    master = master.rename(columns={
-        'brand_code': 'Brand',
-        'description': 'Product_Name',
-        'size': 'Product_Size'
-    })
-    print(f'  ✓ Joined dim_product: {master["product_key"].notna().sum():,} matches')
-    
-    # Join dim_store
+    # Join dim_store for store details
     master = master.merge(
         dim_store[['store_key', 'city', 'state', 'region']],
-        on='store_key',
+        left_on='Store_Key',
+        right_on='store_key',
         how='left'
     )
-    master = master.rename(columns={
-        'city': 'Store_City',
-        'state': 'Store_State',
-        'region': 'Store_Region'
-    })
-    print(f'  ✓ Joined dim_store: {master["Store_City"].notna().sum():,} matches')
+    master = master.drop(columns=['store_key'], errors='ignore')
     
-    # Join dim_date (create comprehensive date attributes)
+    # Rename store columns - only rename if they exist
+    rename_dict = {}
+    if 'city' in master.columns:
+        rename_dict['city'] = 'Store_City'
+    if 'state' in master.columns:
+        rename_dict['state'] = 'Store_State'
+    if 'region' in master.columns:
+        rename_dict['region'] = 'Store_Region'
+    
+    if rename_dict:
+        master = master.rename(columns=rename_dict)
+        print(f'  ✓ Joined dim_store: {master["Store_City"].notna().sum():,} matches')
+    else:
+        print(f'  ⚠️ Store columns not found in merge result: {master.columns.tolist()}')
+    
+    # Join dim_date for date attributes
     dim_date_enhanced = dim_date.copy()
     dim_date_enhanced['full_date_dt'] = pd.to_datetime(dim_date_enhanced['full_date'])
     
@@ -144,45 +150,54 @@ def create_master_dataset():
     print()
     
     # ============================================================================
-    # STEP 5: Join fact_purchases (aggregated by product-store-date)
+    # STEP 5: Join fact_purchases (aggregated by product-date)
     # ============================================================================
     print('Step 5: Joining fact_purchases...')
     print('-'*100)
     
-    # Aggregate purchases by product-store-date
-    purchases_agg = fact_purchases.groupby(['product_key', 'store_key', 'Purchase_Date']).agg({
-        'quantity_purchased': 'sum',
-        'purchase_price': 'mean',
-        'purchase_amount': 'sum',
-        'vendor_key': 'first',
+    # Aggregate purchases by product and date for joining
+    # Note: Purchases don't have store, so we group by product and date only
+    purchases_agg = fact_purchases.groupby(['Product_Number', 'Po_Date']).agg({
+        'Quantity_Purchased': 'sum',
+        'Unit_Cost': 'mean',
+        'Purchase_Amount': 'sum',
+        'Freight_Cost': 'sum',
+        'Vendor_Number': 'first',
+        'Vendor_Name': 'first',
         'Po_Number': lambda x: ', '.join(x.astype(str).unique()[:5]),  # First 5 POs
-        'Delivery_location': 'first'
     }).reset_index()
     
     purchases_agg = purchases_agg.rename(columns={
-        'quantity_purchased': 'Purchase_Quantity',
-        'purchase_price': 'Purchase_Price',
-        'purchase_amount': 'Purchase_Amount',
-        'Po_Number': 'Purchase_Orders'
+        'Po_Date': 'Purchase_Date',
+        'Quantity_Purchased': 'Purchase_Quantity',
+        'Unit_Cost': 'Purchase_Unit_Cost',
+        'Purchase_Amount': 'Total_Purchase_Amount',
+        'Freight_Cost': 'Total_Freight_Cost',
+        'Po_Number': 'Purchase_Orders',
+        'Vendor_Number': 'Vendor_Key',
+        'Vendor_Name': 'Vendor_Name_from_Purchases'
     })
     
-    # Join purchases with date matching (same date or closest prior)
+    # Join purchases by product and date (exact match on date)
     master = master.merge(
         purchases_agg,
-        left_on=['product_key', 'store_key', 'Sales_Date'],
-        right_on=['product_key', 'store_key', 'Purchase_Date'],
+        left_on=['Product_Number', 'Sales_Date'],
+        right_on=['Product_Number', 'Purchase_Date'],
         how='left'
     )
     master = master.drop(columns=['Purchase_Date'], errors='ignore')
+    master = master.drop(columns=['Vendor_Name_from_Purchases'], errors='ignore')
     
     print(f'  ✓ Joined fact_purchases: {master["Purchase_Quantity"].notna().sum():,} matches ({master["Purchase_Quantity"].notna().sum() / len(master) * 100:.1f}%)')
     
     # Join dim_vendor for vendor details
     master = master.merge(
         dim_vendor[['vendor_key', 'vendor_name', 'lead_time_days']],
-        on='vendor_key',
+        left_on='Vendor_Key',
+        right_on='vendor_key',
         how='left'
     )
+    master = master.drop(columns=['vendor_key'], errors='ignore')
     master = master.rename(columns={
         'vendor_name': 'Vendor_Name',
         'lead_time_days': 'Vendor_Lead_Time'
@@ -197,28 +212,21 @@ def create_master_dataset():
     print('-'*100)
     
     # Aggregate inventory by product-store-date
-    inventory_agg = fact_inventory.groupby(['product_key', 'store_key', 'Inventory_Date']).agg({
-        'on_hand_quantity': 'sum',
-        'unit_price': 'mean',
-        'inventory_value': 'sum',
-        'snapshot_type': 'first'
+    inventory_agg = fact_inventory.groupby(['Product_Number', 'Store', 'Snapshot_Date']).agg({
+        'On_Hand_Quantity': 'sum',
+        'Inventory_Value': 'sum',
+        'Snapshot_Type': 'first'
     }).reset_index()
     
-    inventory_agg = inventory_agg.rename(columns={
-        'on_hand_quantity': 'On_Hand_Quantity',
-        'unit_price': 'Inventory_Unit_Price',
-        'inventory_value': 'Inventory_Value',
-        'snapshot_type': 'Snapshot_Type'
-    })
-    
-    # Join inventory with date matching
+    # Join inventory by product, store, and date
     master = master.merge(
         inventory_agg,
-        left_on=['product_key', 'store_key', 'Sales_Date'],
-        right_on=['product_key', 'store_key', 'Inventory_Date'],
+        left_on=['Product_Number', 'Store_Key', 'Sales_Date'],
+        right_on=['Product_Number', 'Store', 'Snapshot_Date'],
         how='left'
     )
-    master = master.drop(columns=['Inventory_Date'], errors='ignore')
+    master = master.drop(columns=['Store'], errors='ignore')
+    master = master.drop(columns=['Snapshot_Date'], errors='ignore')
     
     print(f'  ✓ Joined fact_inventory: {master["On_Hand_Quantity"].notna().sum():,} matches ({master["On_Hand_Quantity"].notna().sum() / len(master) * 100:.1f}%)')
     print()
@@ -230,37 +238,46 @@ def create_master_dataset():
     print('-'*100)
     
     # Revenue metrics
-    master['Gross_Revenue'] = master['Sales_Amount']
+    # Tax is already in master from fact_sales
+    if 'Tax' not in master.columns:
+        master['Tax'] = 0
+    else:
+        master['Tax'] = pd.to_numeric(master['Tax'], errors='coerce').fillna(0)
+    
+    master['Net_Revenue'] = master['Gross_Revenue'] - master['Tax']
     
     # Cost metrics
-    master['Purchase_Cost'] = master['Purchase_Quantity'] * master['Purchase_Price']
+    master['Purchase_Quantity'] = pd.to_numeric(master['Purchase_Quantity'], errors='coerce').fillna(0)
+    master['Purchase_Unit_Cost'] = pd.to_numeric(master['Purchase_Unit_Cost'], errors='coerce').fillna(0)
+    master['Purchase_Cost'] = master['Purchase_Quantity'] * master['Purchase_Unit_Cost']
     master['Purchase_Cost'] = master['Purchase_Cost'].fillna(0)
     
-    master['Landed_Cost'] = master['Purchase_Cost']  # Placeholder - can add freight/duties later
+    # Freight and landed cost
+    master['Total_Freight_Cost'] = pd.to_numeric(master['Total_Freight_Cost'], errors='coerce').fillna(0)
+    master['Landed_Cost'] = master['Purchase_Cost'] + master['Total_Freight_Cost']
     
     # Profit metrics
-    master['Gross_Profit'] = master['Gross_Revenue'] - master['Purchase_Cost']
+    master['Gross_Profit'] = master['Net_Revenue'] - master['Landed_Cost']
     master['Margin_Percent'] = np.where(
-        master['Gross_Revenue'] > 0,
-        (master['Gross_Profit'] / master['Gross_Revenue']) * 100,
+        master['Net_Revenue'] > 0,
+        (master['Gross_Profit'] / master['Net_Revenue']) * 100,
         0
     )
     
-    # Inventory metrics (placeholders - need time series calculation)
-    master['Inventory_Turnover'] = np.nan  # Requires: COGS / Average Inventory
-    master['Days_of_Inventory'] = np.nan  # Requires: (Average Inventory / COGS) * 365
-    
-    # Supplier metrics
-    master['Supplier_Spend'] = master['Purchase_Amount']
+    # Inventory metrics (placeholders for time-series calculations)
+    master['Inventory_Turnover'] = np.nan
+    master['Days_of_Inventory'] = np.nan
     
     print('  ✓ Gross_Revenue')
+    print('  ✓ Tax')
+    print('  ✓ Net_Revenue (Gross_Revenue - Tax)')
     print('  ✓ Purchase_Cost')
-    print('  ✓ Landed_Cost')
-    print('  ✓ Gross_Profit')
+    print('  ✓ Total_Freight_Cost')
+    print('  ✓ Landed_Cost (Purchase_Cost + Freight_Cost)')
+    print('  ✓ Gross_Profit (Net_Revenue - Landed_Cost)')
     print('  ✓ Margin_Percent')
     print('  ✓ Inventory_Turnover (placeholder)')
     print('  ✓ Days_of_Inventory (placeholder)')
-    print('  ✓ Supplier_Spend')
     print()
     
     # ============================================================================
@@ -271,11 +288,11 @@ def create_master_dataset():
     
     validation_summary = {
         'Total Rows': len(master),
-        'Missing Product Keys': master['product_key'].isna().sum(),
-        'Missing Store Keys': master['store_key'].isna().sum(),
+        'Missing Product Numbers': master['Product_Number'].isna().sum(),
+        'Missing Store Keys': master['Store_Key'].isna().sum(),
         'Missing Sales Dates': master['Sales_Date'].isna().sum(),
         'Duplicate Rows': master.duplicated().sum(),
-        'Product Match Rate': f"{(master['Brand'].notna().sum() / len(master) * 100):.2f}%",
+        'Product Match Rate': f"{(master['Product_Number'].notna().sum() / len(master) * 100):.2f}%",
         'Store Match Rate': f"{(master['Store_City'].notna().sum() / len(master) * 100):.2f}%",
         'Date Match Rate': f"{(master['Year'].notna().sum() / len(master) * 100):.2f}%",
         'Purchase Match Rate': f"{(master['Purchase_Quantity'].notna().sum() / len(master) * 100):.2f}%",
@@ -289,9 +306,9 @@ def create_master_dataset():
     
     # Check for critical issues
     critical_issues = []
-    if master['product_key'].isna().sum() > 0:
-        critical_issues.append('Missing product keys detected')
-    if master['store_key'].isna().sum() > 0:
+    if master['Product_Number'].isna().sum() > 0:
+        critical_issues.append('Missing product numbers detected')
+    if master['Store_Key'].isna().sum() > 0:
         critical_issues.append('Missing store keys detected')
     if master['Sales_Date'].isna().sum() > 0:
         critical_issues.append('Missing sales dates detected')
@@ -316,20 +333,17 @@ def create_master_dataset():
         # Transaction Keys
         'Sales_Order',
         'Sales_Date',
-        'date_key',
         
-        # Product Attributes
-        'product_key',
-        'Brand',
-        'Product_Name',
-        'Product_Size',
+        # Product Attributes (already in fact_sales)
+        'Product_Number',
+        'Description',
+        'Size',
         
         # Store Attributes
-        'store_key',
+        'Store_Key',
         'Store_City',
         'Store_State',
         'Store_Region',
-        'Delivery_location',
         
         # Date Attributes
         'Year',
@@ -343,26 +357,26 @@ def create_master_dataset():
         # Sales Metrics
         'Sales_Quantity',
         'Sales_Price',
-        'Sales_Amount',
         'Gross_Revenue',
+        'Tax',
+        'Net_Revenue',
         
         # Purchase Metrics
         'Purchase_Orders',
         'Purchase_Quantity',
-        'Purchase_Price',
-        'Purchase_Amount',
+        'Purchase_Unit_Cost',
         'Purchase_Cost',
+        'Total_Purchase_Amount',
+        'Total_Freight_Cost',
         'Landed_Cost',
         
         # Vendor Attributes
-        'vendor_key',
+        'Vendor_Key',
         'Vendor_Name',
         'Vendor_Lead_Time',
-        'Supplier_Spend',
         
         # Inventory Metrics
         'On_Hand_Quantity',
-        'Inventory_Unit_Price',
         'Inventory_Value',
         'Snapshot_Type',
         
@@ -382,17 +396,24 @@ def create_master_dataset():
     print()
     
     # ============================================================================
-    # STEP 10: Export to Parquet
+    # STEP 10: Export to Parquet and CSV
     # ============================================================================
     print('Step 10: Exporting master dataset...')
     print('-'*100)
     
-    master.to_parquet(OUTPUT_FILE, index=False, compression='snappy')
+    # Parquet export
+    parquet_file = OUTPUT_FILE
+    master.to_parquet(parquet_file, index=False, compression='snappy')
+    parquet_size_mb = parquet_file.stat().st_size / (1024 * 1024)
+    print(f'  ✓ Exported to Parquet: {parquet_file}')
+    print(f'     File size: {parquet_size_mb:.2f} MB')
     
-    file_size_mb = OUTPUT_FILE.stat().st_size / (1024 * 1024)
-    print(f'  ✓ Exported to: {OUTPUT_FILE}')
-    print(f'  ✓ File size: {file_size_mb:.2f} MB')
-    print(f'  ✓ Format: Parquet (compressed)')
+    # CSV export
+    csv_file = DATA_MODEL_DIR / 'master_dataset.csv'
+    master.to_csv(csv_file, index=False)
+    csv_size_mb = csv_file.stat().st_size / (1024 * 1024)
+    print(f'  ✓ Exported to CSV: {csv_file}')
+    print(f'     File size: {csv_size_mb:.2f} MB')
     print()
     
     # ============================================================================
@@ -404,21 +425,27 @@ def create_master_dataset():
     print()
     print(f'  Total Records: {len(master):,}')
     print(f'  Total Columns: {len(master.columns)}')
-    print(f'  Date Range: {master["Sales_Date"].min()} to {master["Sales_Date"].max()}')
-    print(f'  Unique Products: {master["product_key"].nunique():,}')
-    print(f'  Unique Stores: {master["store_key"].nunique()}')
-    print(f'  Unique Vendors: {master["vendor_key"].nunique()}')
+    print(f'  Date Range: {master["Sales_Date"].min().date()} to {master["Sales_Date"].max().date()}')
+    print(f'  Unique Products: {master["Product_Number"].nunique():,}')
+    print(f'  Unique Stores: {master["Store_Key"].nunique()}')
+    print(f'  Unique Vendors: {master["Vendor_Key"].nunique()}')
     print()
-    print('  Column Categories:')
-    print(f'    - Transaction/Keys: 3 columns')
-    print(f'    - Product Attributes: 4 columns')
-    print(f'    - Store/Location: 4 columns')
-    print(f'    - Date/Time: 7 columns')
-    print(f'    - Sales Metrics: 4 columns')
-    print(f'    - Purchase Metrics: 6 columns')
-    print(f'    - Vendor Metrics: 4 columns')
-    print(f'    - Inventory Metrics: 4 columns')
-    print(f'    - KPI Metrics: 4 columns')
+    
+    # Financial Summary
+    gross_revenue = master['Gross_Revenue'].sum()
+    total_tax = master['Tax'].sum()
+    net_revenue = master['Net_Revenue'].sum()
+    total_freight = master['Total_Freight_Cost'].sum()
+    total_profit = master['Gross_Profit'].sum()
+    avg_margin = master['Margin_Percent'].mean()
+    
+    print('  Financial Summary:')
+    print(f'    - Gross Revenue: ${gross_revenue:,.2f}')
+    print(f'    - Total Tax: ${total_tax:,.2f}')
+    print(f'    - Net Revenue: ${net_revenue:,.2f}')
+    print(f'    - Total Freight Cost: ${total_freight:,.2f}')
+    print(f'    - Total Gross Profit: ${total_profit:,.2f}')
+    print(f'    - Average Margin %: {avg_margin:.2f}%')
     print()
     print('='*100)
     
